@@ -171,6 +171,8 @@ The length of a trust anchor ID's binary representation MUST NOT exceed 255 byte
 
 Relying parties are configured with one or more supported trust anchors. Each trust anchor that participates in this protocol must have an associated trust anchor ID.
 
+{{certificate-attributes}} defines a format which MAY be used to associate trust anchor IDs with trust anchors that are represented as X.509 certificates. Relying parties MAY additionally use application-specific formats as appropriate.
+
 When trust anchors are represented as X.509 certificates, the X.509 trust anchor ID extension MAY be used to carry this ID. The trust anchor ID extension has an `extnID` of `id-pe-trustAnchorID` and an `extnValue` containing a DER-encoded TrustAnchorID structure, defined below. The TrustAnchorID is the trust anchor ID's ASN.1 representation, described in {{trust-anchor-ids}}. This extension MUST be non-critical.
 
 ~~~ asn.1
@@ -181,7 +183,7 @@ id-pe-trustAnchorID OBJECT IDENTIFIER ::=
 TrustAnchorID ::= RELATIVE-OID
 ~~~
 
-Relying parties MAY instead or additionally configure trust anchor IDs via some application-specific out-of-band information.
+TODO: Is this useful? draft-davidben-tls-merkle-tree-certs defines yet another way to mark new trust anchors, by putting it in the subject name. That targets making a new CA that has no reason to be tied to the verbose X.509 naming scheme. Strictly speaking, RDNs also use the same ATTRIBUTE class, so we probably could just use attribute OID for both of them at that point. Except we then run into https://github.com/davidben/merkle-tree-certs/issues/142
 
 Relying parties MAY support trust anchors without associated trust anchor IDs, but such trust anchors will not participate in this protocol. Those trust anchors MAY participate in other trust anchor negotiation protocols, such as the `certificate_authorities` extension.
 
@@ -189,7 +191,7 @@ Relying parties MAY support trust anchors without associated trust anchor IDs, b
 
 Authenticating parties are configured with one or more candidate certification paths to present in TLS, in some preference order. This preference order is used when multiple candidate paths are usable for a connection. For example, the authenticating party may prefer candidates that minimize message size or have more performant private keys.
 
-Each candidate path which participates in this protocol must be configured with the trust anchor ID for its corresponding trust anchor. It is RECOMMENDED, though not required, that this information come from the CA. {{certificate-properties}} defines a RECOMMENDED format for this information, along with an optional ACME {{!RFC8555}} extension for CAs to send it.
+Each candidate path which participates in this protocol must be configured with the trust anchor ID for its corresponding trust anchor. It is RECOMMENDED, though not required, that this information come from the CA. {{certificate-attributes}} defines a RECOMMENDED format for this information, along with an optional ACME {{!RFC8555}} extension for CAs to send it.
 
 Authenticating parties MAY have candidate certification paths without associated trust anchor IDs, but such paths will not participate in this protocol. Those paths MAY participate in other trust anchor negotiation protocols, such as the `certificate_authorities` extension.
 
@@ -295,69 +297,132 @@ If doing so, the client MAY send a subset of this intersection to meet size cons
 
 Although this service parameter is intended to reduce trust anchor mismatches, mismatches may still occur in some scenarios. Clients and servers MUST continue to implement the provisions described in {{retry-mechanism}}, even when using this service parameter.
 
-# Certificate Properties {#certificate-properties}
+# Certificate Attributes
 
-As described in {{authenticating-party-configuration}}, certification paths participating in this mechanism must be configured with a trust anchor ID. This section introduces a RECOMMENDED extensible CertificatePropertyList structure for representing this and other additional properties of a certification path. CertificatePropertyLists may be used as part of authenticating party configuration, and for CAs to communicate additional properties during certificate issuance.
+This section defines a CertificateWithAttributes structure for attributes that may be associated with certificates. A CertificateWithAttributes is an extensible structure that associates an X.509 certificate with a set of ASN.1 attributes {{!RFC5912}}, defined below:
 
-The extensibility aims to simplify application deployment as PKI mechanisms evolve. When certificate issuance and application software is updated to pass this structure to the underlying TLS implementation, new properties may be transparently defined without changes to certificate and configuration management.
+~~~ asn.1
+CertificateWithAttributes ::= SEQUENCE {
+    certificate Certificate,
+    attributes  SET OF AttributeSet{{CertificateAttrSet}}
+}
 
-A CertificatePropertyList is defined using the TLS presentation language ({{Section 3 of !RFC8446}}) below:
+CertificateAttrSet ATTRIBUTE ::= {
+    at-issuerTrustAnchorID |
+    at-subjectTrustAnchorID,
+    ...
+}
 
-~~~ tls-presentation
-enum { trust_anchor_id(0), (2^16-1) } CertificatePropertyType;
+-- ATTRIBUTE and AttributeSet are defined in [RFC5912]:
 
-struct {
-    CertificatePropertyType type;
-    opaque data<0..2^16-1>;
-} CertificateProperty;
+ATTRIBUTE ::= CLASS {
+    &id             OBJECT IDENTIFIER UNIQUE,
+    &Type           OPTIONAL,
+    &equality-match MATCHING-RULE OPTIONAL,
+    &minCount       INTEGER DEFAULT 1,
+    &maxCount       INTEGER OPTIONAL
+} WITH SYNTAX {
+    [TYPE &Type]
+    [EQUALITY MATCHING RULE &equality-match]
+    [COUNTS [MIN &minCount] [MAX &maxCount]]
+    IDENTIFIED BY &id
+}
 
-CertificateProperty CertificatePropertyList<0..2^16-1>;
+AttributeSet{ATTRIBUTE:AttrSet} ::= SEQUENCE {
+    type      ATTRIBUTE.&id({AttrSet}),
+    values    SET SIZE (1..MAX) OF ATTRIBUTE.
+                  &Type({AttrSet}{@type})
+}
 ~~~
 
-The entries in a CertificatePropertyList MUST be sorted numerically by `type` and MUST NOT contain values with a duplicate `type`. Inputs that do not satisfy these invariants are syntax errors and MUST be rejected by parsers.
+A CertificateWithAttributes represents the certificate in the `certificate` field. The `attributes` field describes a set of *certificate attributes* that apply to the certificate. This document defines two attributes: issuer trust anchor ID ({{issuer-trust-anchor-id}}) and subject trust anchor ID ({{subject-trust-anchor-id}}). Other attributes may be defined by other documents. Applications MUST ignore unrecognized certificate attributes.
 
-This document defines a single property, `trust_anchor_id`. The `data` field of the property contains the binary representation of the trust anchor ID of the certification path's trust anchor, as described in {{authenticating-party-configuration}}. Future documents may define other properties for use with other mechanisms.
+This structure allows certificate-related information to be interchanged between different parts of a TLS deployment. For example:
 
-Authenticating parties MUST ignore properties with unrecognized CertificatePropertyType values.
+* A relying party's trust anchor configuration might use certificate attributes to describe the trust anchor ID ({{subject-trust-anchor-id}}) or express application-specific constraints on the trust anchor.
 
-## Media Type
+* A certification authority might publish its root certificate and trust anchor ID as a CertificateWithAttributes.
 
-A certification path with its associated CertificatePropertyList may be represented in a PEM {{!RFC7468}} structure in a file of type "application/pem-certificate-chain-with-properties". Files of this type MUST use the strict encoding and MUST NOT include explanatory text.  The ABNF {{!RFC5234}} for this format is
+* A certification authority might provision a certification path, with issuing trust anchor ID ({{issuer-trust-anchor-id}}), to an authenticating party. This structure can then be passed through the authenticating party's configuration pipeline, hosting providers, etc., down to the TLS implementation.
+
+* A hosting provider might take certificate configuration from service owners in the form of a CertificateWithAttributes, to represent the issuing trust anchor ID, or other attributes, in a common format.
+
+As an extensible mechanism, certificate attributes aims to simplify application deployment as PKI mechanisms evolve. For example, when certificate issuance and application software is updated to pass CA-provided certificate attributes to the underlying TLS implementation, new attributes may be transparently defined without changes to certificate and configuration management.
+
+{{using-pkcs-12}} additionally defines how to interchange certificate attributes in PKCS #12 PFX {{!RFC7292}} structures, and {{pem-representation}} defines a PEM {{!RFC7468}} representation.
+
+## Issuer Trust Anchor ID
+
+As described in {{authenticating-party-configuration}}, authenticating parties associate participating certification paths with the issuing trust anchor ID. Authenticating parties are RECOMMENDED to configure this with the issuer trust anchor ID attribute, defined below:
+
+~~~ asn.1
+id-issuerTrustAnchorID OBJECT IDENTIFIER ::= TBD
+
+at-issuerTrustAnchorID ATTRIBUTE ::= {
+    TYPE TrustAnchorID
+    COUNTS MAX 1
+    IDENTIFIED BY id-issuerTrustAnchorID
+}
+~~~
+
+The issuer trust anchor ID for a certificate specifies the trust anchor ID of its issuer. Given a candidate certification path, the path's corresponding trust anchor is the issuer trust anchor ID of the last certificate.
+
+It is RECOMMENDED that the certification authorities include the issuer trust anchor ID attribute when provisioning certificates to authenticating parties, and that TLS serving software use this attribute to configure trust anchor ID serving. {{acme-extension}} describes how to to communicate certificate attributes with ACME {{!RFC8555}}.
+
+## Subject Trust Anchor ID
+
+As described in {{relying-party-configuration}}, relying parties associate participating trust anchors with trust anchor IDs. The subject trust anchor ID attribute, defined below, may be used to represent this:
+
+~~~ asn.1
+id-subjectTrustAnchorID OBJECT IDENTIFIER ::= TBD
+
+at-subjectTrustAnchorID ATTRIBUTE ::= {
+    TYPE TrustAnchorID
+    COUNTS MAX 1
+    IDENTIFIED BY id-issuerTrustAnchorID
+}
+~~~
+
+The subject trust anchor ID for a certificate specifies the trust anchor ID of its subject.
+
+## Using PKCS #12
+
+Some applications use PKCS #12 PFX {{!RFC7292}} structures to configure certificates and private keys. Certificate attributes defined for use in CertificateWithAttributes MAY be used as bag attributes for PKCS #12 CertBags ({{Section 4.2.3 of !RFC7292}}). Authenticating parties that use PKCS #12 for configuration SHOULD support the issuer trust anchor ID attribute ({{issuer-trust-anchor-id}}) to configure this protocol.
+
+## PEM Representation
+
+A certification path, with associated attributes ({{certificate-attributes}}) for each certificate, may be represented in a PEM {{!RFC7468}} structure in a file of type "application/pem-certificate-chain-with-attributes". Files of this type MUST use the strict encoding and MUST NOT include explanatory text.  The ABNF {{!RFC5234}} for this format is
 as follows, where "stricttextualmsg" and "eol" are as defined in
 {{Section 3 of !RFC7468}}:
 
 ~~~ abnf
-certchainwithproperties = stricttextualmsg eol stricttextualmsg
+certchainwithattributes = stricttextualmsg eol stricttextualmsg
                           *(eol stricttextualmsg)
 ~~~
 
-The first element MUST be the encoded CertificatePropertyList.
-The second element MUST be an end-entity certificate.  Each following
-certificate MUST directly certify the one preceding it. The certificate representing the trust anchor MUST be omitted from the path.
+Each element describes a certificate. The label may be "CERTIFICATE" or "CERTIFICATE WITH ATTRIBUTES". If "CERTIFICATE", the element contains a DER-encoded {{X690}} Certificate {{RFC5280}}. If "CERTIFICATE WITH ATTRIBUTES", the element contains a DER-encoded CertificateWithAttributes ({{certificate-attributes}}).
 
-CertificatePropertyLists are encoded using the "CERTIFICATE PROPERTIES" label. The encoded data is a serialized CertificatePropertyList, defined in {{certificate-properties}}.
+The first element MUST be an end-entity certificate. Each following certificate MUST directly certify the one preceding it. The certificate representing the trust anchor MUST be omitted from the path.
 
-Certificates are encoded as in {{Section 5.1 of !RFC7468}}, except DER {{X690}} MUST be used.
-
-The following is an example file with a certification path containing an end-entity certificate and an intermediate certificate.
+The following is an example file with a certification path containing an end-entity certificate and two intermediate certificates. The first certificate and third certificates have associated attributes, while the others do not.
 
 ~~~
------BEGIN CERTIFICATE PROPERTIES-----
+-----BEGIN CERTIFICATE WITH ATTRIBUTES-----
 TODO fill in an example
------END CERTIFICATE PROPERTIES-----
+-----END CERTIFICATE WITH ATTRIBUTES-----
 -----BEGIN CERTIFICATE-----
 TODO fill in an example
 -----END CERTIFICATE-----
------BEGIN CERTIFICATE-----
+-----BEGIN CERTIFICATE WITH ATTRIBUTES-----
 TODO fill in an example
------END CERTIFICATE-----
+-----END CERTIFICATE WITH ATTRIBUTES-----
 ~~~
 
 The IANA registration for this media type is described in {{media-type-updates}}.
 
 ## ACME Extension
 
-The format defined in {{media-type}} can be used with ACME's alternate format mechanism (see {{Section 7.4.2 of !RFC8555}}) as follows. When downloading certificates, a supporting client SHOULD include "application/pem-certificate-chain-with-properties" in its HTTP Accept header ({{Section 12.5.1 of !RFC9110}}). When a supporting server sees such a header, it MAY then respond with that format to include a CertificatePropertyList with the certification path. This CertificatePropertyList MAY include a `trust_anchor_id` property for use with this protocol, or other properties defined in another document.
+The format defined in {{pem-representation}} can be used with ACME's alternate format mechanism (see {{Section 7.4.2 of !RFC8555}}) as follows. When downloading certificates, a supporting client SHOULD include "application/pem-certificate-chain-with-attributes" in its HTTP Accept header ({{Section 12.5.1 of !RFC9110}}). When a supporting server sees such a header, it MAY then respond with this format. The response MAY include the issuing trust anchor ID attribute, for use with this protocol, or other attributes defined in another document.
 
 When used with ACME's alternate certificate chain mechanism (see {{Section 7.4.2 of !RFC8555}}), this protocol removes the need for heuristics in determining which path to serve to which relying party.
 
@@ -523,7 +588,7 @@ Type name:
 : application
 
 Subtype name:
-: pem-certificate-chain-with-properties
+: pem-certificate-chain-with-attributes
 
 Required parameters:
 : None
@@ -535,13 +600,13 @@ Encoding considerations:
 : 7bit
 
 Security considerations:
-: Carries a cryptographic certificate and its associated certificate chain and additional properties. This media type carries no active content.
+: Carries a cryptographic certificate and its associated certificate chain and additional attributes. This media type carries no active content.
 
 Interoperability considerations:
 : None
 
 Published specification:
-: [this-RFC, {{media-type}}]
+: [this-RFC, {{pem-representation}}]
 
 Applications that use this media type:
 : ACME clients and servers, HTTP servers, other applications that need to be configured with a certificate chain
@@ -583,9 +648,7 @@ IANA is requested to create the following entry in the SMI Security for PKIX Cer
 |---------|---------------------|------------|
 | TBD     | id-pe-trustAnchorID | [this-RFC] |
 
-## CertificatePropertyType Registry
-
-[[TODO: Establish a CertificatePropertyType registry.]]
+TODO: Is there canonical SMI registry for certificate attribute OIDs?
 
 --- back
 
@@ -601,11 +664,19 @@ DEFINITIONS EXPLICIT TAGS ::=
 BEGIN
 
 IMPORTS
-    EXTENSION
+    AttributeSet, ATTRIBUTE, EXTENSION
     FROM PKIX-CommonTypes-2009 -- From [RFC5912]
-    { iso(1) identified-organization(3) dod(6)
-      internet(1) security(5) mechanisms(5) pkix(7)
-      id-mod(0) id-mod-pkixCommon-02(57) };
+    { iso(1) identified-organization(3) dod(6) internet(1)
+      security(5) mechanisms(5) pkix(7) id-mod(0)
+      id-mod-pkixCommon-02(57) }
+
+    Certificate
+    FROM PKIX1Explicit-2009 -- From [RFC5912]
+    { iso(1) identified-organization(3) dod(6) internet(1)
+      security(5) mechanisms(5) pkix(7) id-mod(0)
+      id-mod-pkix1-explicit-02(51) };
+
+TrustAnchorID ::= RELATIVE-OID
 
 -- Trust Anchor IDs Certificate Extension
 
@@ -618,7 +689,34 @@ id-pe-trustAnchorID OBJECT IDENTIFIER ::=
     { iso(1) identified-organization(3) dod(6) internet(1)
       security(5) mechanisms(5) pkix(7) id-pe(1) TBD }
 
-TrustAnchorID ::= RELATIVE-OID
+-- Certificate Attributes
+
+CertificateWithAttributes ::= SEQUENCE {
+    certificate Certificate,
+    attributes  SET OF AttributeSet{{CertificateAttrSet}}
+}
+
+CertificateAttrSet ATTRIBUTE ::= {
+    at-issuerTrustAnchorID |
+    at-subjectTrustAnchorID,
+    ...
+}
+
+id-issuerTrustAnchorID OBJECT IDENTIFIER ::= TBD
+
+at-issuerTrustAnchorID ATTRIBUTE ::= {
+    TYPE TrustAnchorID
+    COUNTS MAX 1
+    IDENTIFIED BY id-issuerTrustAnchorID
+}
+
+id-subjectTrustAnchorID OBJECT IDENTIFIER ::= TBD
+
+at-subjectTrustAnchorID ATTRIBUTE ::= {
+    TYPE TrustAnchorID
+    COUNTS MAX 1
+    IDENTIFIED BY id-issuerTrustAnchorID
+}
 
 END
 ~~~
