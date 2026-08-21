@@ -261,7 +261,10 @@ The authenticating party compares the requested trust anchor IDs with its candid
 
 * A (possibly empty) list of *trust anchor group inclusions*, which describe trust anchor group known to contain the issuing CA.
 
-A CA can be contained in family of related trust anchor groups, e.g. in the versioning construction described in {{versioned-groups}}. To accomodate this, each trust anchor group inclusion describes a pattern of containing groups using a trust anchor range, defined below in {{trust-anchor-ranges}}.
+A CA can be contained in family of related trust anchor groups, e.g. in the versioning construction described in {{versioned-groups}}. To accomodate this, each trust anchor group inclusion describes a pattern of containing groups. Two patterns are defined in this document:
+
+* Trust anchor prefixes, defined below in {{trust-anchor-prefixes}}
+* Trust anchor ranges, defined below in {{trust-anchor-ranges}}
 
 {{certificate-properties}} defines a format to represent these properties. {{acme-extension}} defines how to obtain them from ACME {{!RFC8555}}.
 
@@ -272,9 +275,26 @@ The authenticating party intersects this information with the requested trust an
 
 Authenticating parties MAY have candidate certification paths that do not participate in this protocol and lack these properties. These paths MAY participate in other trust anchor negotiation protocols, such as the `certificate_authorities` extension, or they MAY be used as a fallback when no matching issuer is found.
 
+### Trust Anchor Prefixes
+
+A *trust anchor prefix* represents all IDs that are descendants of some base ID. It is defined by the following TLS structure:
+
+~~~ tls-presentation
+struct {
+    TrustAnchorID base;
+} TrustAnchorPrefix;
+~~~
+
+A trust anchor prefix is said to *contain* some trust anchor ID, `id`, if `id`, as a relative OID, is some descendant of `base` or equal to `base`.
+
+The following procedure can be used to perform this check. It succeeds if the range contains `id` and fails otherwise:
+
+1. Check that `base` does not end in the middle of an OID component. That is, check that the most-significant bit of the last byte of `base` is unset. If it is set, fail the procedure.
+2. Check that `base` is a prefix of `id`. If not, fail the procedure. Otherwise, the procedure succeeds.
+
 ### Trust Anchor Ranges
 
-A *trust anchor range* is a structure that represents a particular pattern of related IDs. It is defined by the following TLS structure:
+A *trust anchor range* represents a range of IDs that are children of some base ID. It is defined by the following TLS structure:
 
 ~~~ tls-presentation
 struct {
@@ -284,7 +304,7 @@ struct {
 } TrustAnchorRange;
 ~~~
 
-A trust anchor range is said to *contain* some trust anchor ID, `id`, if the `id`, as a relative OID, is the concatenation of `base` and some integer component between `min` and `max`, inclusive. `max` can be set to 2<sup>64</sup>-1 if there is no upper bound. `min` and `max` can be set to the same value to describe a single ID.
+A trust anchor range is said to *contain* some trust anchor ID, `id`, if `id`, as a relative OID, is the concatenation of `base` and some integer component between `min` and `max`, inclusive. `max` can be set to 2<sup>64</sup>-1 if there is no upper bound. `min` and `max` can be set to the same value to describe a single ID.
 
 The following procedure can be used to perform this check. It succeeds if the range contains `id` and fails otherwise:
 
@@ -420,8 +440,9 @@ A CertificatePropertyList is defined using the TLS presentation language ({{Sect
 ~~~ tls-presentation
 enum {
     trust_anchor_id(0),
-    trust_anchor_group_inclusions(1),
+    trust_anchor_group_ranges(1),
     trust_anchor_negotiation(2),
+    trust_anchor_group_prefixes(3),
     (2^16-1)
 } CertificatePropertyType;
 
@@ -438,7 +459,8 @@ The entries in a CertificatePropertyList MUST be sorted numerically by `type` an
 This document defines three properties:
 
 * `trust_anchor_id`, defined in {{trust-anchor-id-property}}
-* `trust_anchor_group_inclusions`, defined in {{trust-anchor-group-inclusions-property}}
+* `trust_anchor_group_prefixes`, defined in {{trust-anchor-group-prefixes-property}}
+* `trust_anchor_group_ranges`, defined in {{trust-anchor-group-ranges-property}}
 * `trust_anchor_negotiation`, defined in {{trust-anchor-negotiation-property}}
 
 Future documents MAY define other properties for use with other mechanisms. Such a document MUST define the format of the `data` field and how authenticating parties interpret the property. Authenticating parties MUST ignore properties with unrecognized CertificatePropertyType values.
@@ -447,9 +469,17 @@ Future documents MAY define other properties for use with other mechanisms. Such
 
 The `trust_anchor_id` property's `data` field contains the binary representation of the trust anchor ID of the certification path's trust anchor, as described in {{authenticating-party-configuration}}.
 
-## Trust Anchor Group Inclusions Property
+## Trust Anchor Group Prefixes Property
 
-The `trust_anchor_group_inclusions` property's `data` field contains a TrustAnchorRangeList structure, defined below. The TrustAnchorRangeList structure describes the certification path's trust anchor group inclusions, as described in {{authenticating-party-configuration}}. Each TrustAnchorRange structure describes a trust anchor range, as defined in {{trust-anchor-ranges}}.
+The `trust_anchor_group_prefixes` property's `data` field contains a TrustAnchorPrefixList structure, defined below. It describes trust anchor group inclusions (see {{authenticating-party-configuration}}) for the certification path as trust anchor prefixes (see {{trust-anchor-prefixes}}).
+
+~~~ tls-presentation
+TrustAnchorPrefix TrustAnchorPrefixList<1..2^16-1>;
+~~~
+
+## Trust Anchor Group Ranges Property
+
+The `trust_anchor_group_ranges` property's `data` field contains a TrustAnchorRangeList structure, defined below. T It describes trust anchor group inclusions (see {{authenticating-party-configuration}}) for the certification path as trust anchor ranges (see {{trust-anchor-ranges}}).
 
 ~~~ tls-presentation
 TrustAnchorRange TrustAnchorRangeList<1..2^16-1>;
@@ -461,7 +491,7 @@ The `trust_anchor_negotiation` property's `data` field MUST be empty.
 
 When a candidate certification path has this property, the authenticating party SHOULD NOT select it as a fallback when the path's issuer cannot be matched against the relying party. When a candidate path lacks this property, the authenticating party MAY use it as a fallback. See also {{certificate-selection}}.
 
-A path without the `trust_anchor_negotiation` property MAY still participate in this protocol and include the `trust_anchor_id` and `trust_anchor_group_inclusions` properties. In particular, the authenticating party MAY still choose to condition the path on trust anchor negotiation.
+A path without the `trust_anchor_negotiation` property MAY still participate in this protocol and include any of the `trust_anchor_id`, `trust_anchor_group_prefixes`, and `trust_anchor_group_ranges` properties. In particular, the authenticating party MAY still choose to condition the path on trust anchor negotiation.
 
 {{acme-extension}} discusses how an ACME server might set this property, as well as examples where the authenticating party might override this recommendation.
 
@@ -487,15 +517,17 @@ Certificates are encoded as in {{Section 5.1 of !RFC7468}}, except DER {{X690}} 
 The following is an example file with a certification path containing an end-entity certificate and an intermediate certificate. The example CertificatePropertyList encodes:
 
 * A `trust_anchor_id` property of `32473.1`
-* A `trust_anchor_group_inclusions` property with two group inclusions:
+* A `trust_anchor_group_ranges` property with two ranges:
   * `2187.2.100` to `2187.2.200`
   * `32473.3.42` to `32473.3.MAX`
 * A `trust_anchor_negotiation` property
+* A `trust_anchor_group_prefixes` property with one prefix:
+  * `32473.4`
 
 ~~~
 -----BEGIN CERTIFICATE PROPERTIES-----
-ADsAAAAEgf1ZAQABACsAKQORCwIAAAAAAAAAZAAAAAAAAADIBIH9WQMAAAAAAAAA
-Kv//////////AAIAAA==
+AEwAAAAEgf1ZAQABACsAKQORCwIAAAAAAAAAZAAAAAAAAADIBIH9WQMAAAAAAAAA
+Kv//////////AAIAAAAAAAAAAAADAAcABQSB/VkE
 -----END CERTIFICATE PROPERTIES-----
 -----BEGIN CERTIFICATE-----
 MIIBVzCB/6ADAgECAgkAh7Uv5X8pplkwCgYIKoZIzj0EAwIwGjEYMBYGA1UEAwwP
@@ -522,7 +554,7 @@ The IANA registration for this media type is described in {{media-type-updates}}
 
 ## ACME Extension
 
-The format defined in {{media-type}} can be used with ACME's alternate format mechanism (see {{Section 7.4.2 of !RFC8555}}) as follows. When downloading certificates, a supporting client SHOULD include "application/pem-certificate-chain-with-properties" in its HTTP Accept header ({{Section 12.5.1 of !RFC9110}}). When a supporting server sees such a header, it MAY then respond with that format to include a CertificatePropertyList with the certification path. This CertificatePropertyList MAY include `trust_anchor_id` and `trust_anchor_group_inclusions` properties for use with this protocol, or other properties defined in another document.
+The format defined in {{media-type}} can be used with ACME's alternate format mechanism (see {{Section 7.4.2 of !RFC8555}}) as follows. When downloading certificates, a supporting client SHOULD include "application/pem-certificate-chain-with-properties" in its HTTP Accept header ({{Section 12.5.1 of !RFC9110}}). When a supporting server sees such a header, it MAY then respond with that format to include a CertificatePropertyList with the certification path. This CertificatePropertyList MAY include the properties defined in {{certificate-properties}} or other properties defined in another document.
 
 When the ACME server provides multiple paths, e.g. with ACME's alternate certificate chain mechanism (see {{Section 7.4.2 of !RFC8555}}), the ACME server SHOULD include the `trust_anchor_negotiation` property on any paths it expects to gate on trust anchor negotiation. It SHOULD omit the property on any paths which are possible fallbacks when no trust anchors match.
 
@@ -756,11 +788,12 @@ Change controller:
 
 IANA is requested to create the "CertificatePropertyType" registry within the "Transport Layer Security (TLS) Extensions" group. The initial entries in the registry are as follows:
 
-| Decimal | Description                   | References |
-|---------|-------------------------------|------------|
-| 0       | trust_anchor_id               | [this-RFC] |
-| 1       | trust_anchor_group_inclusions | [this-RFC] |
-| 2       | trust_anchor_negotiation      | [this-RFC] |
+| Decimal | Description                 | References |
+|---------|-----------------------------|------------|
+| 0       | trust_anchor_id             | [this-RFC] |
+| 1       | trust_anchor_group_ranges   | [this-RFC] |
+| 2       | trust_anchor_negotiation    | [this-RFC] |
+| 3       | trust_anchor_group_prefixes | [this-RFC] |
 
 New values are allocated according to the following process:
 

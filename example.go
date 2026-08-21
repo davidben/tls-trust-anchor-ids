@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	propertyTrustAnchorID              = 0
-	propertyTrustAnchorGroupInclusions = 1
-	propertyTrustAnchorNegotiation     = 2
+	propertyTrustAnchorID            = 0
+	propertyTrustAnchorGroupRanges   = 1
+	propertyTrustAnchorNegotiation   = 2
+	propertyTrustAnchorGroupPrefixes = 3
 )
 
 type TrustAnchorID []uint64
@@ -50,14 +51,16 @@ type TrustAnchorRange struct {
 }
 
 type CertificatePropertyList struct {
-	TrustAnchorID              TrustAnchorID
-	TrustAnchorGroupInclusions []TrustAnchorRange
-	TrustAnchorNegotiation     bool
+	TrustAnchorID            TrustAnchorID
+	TrustAnchorGroupPrefixes []TrustAnchorID
+	TrustAnchorGroupRanges   []TrustAnchorRange
+	TrustAnchorNegotiation   bool
 }
 
 func (l *CertificatePropertyList) Marshal() ([]byte, error) {
 	b := cryptobyte.NewBuilder(nil)
 	b.AddUint16LengthPrefixed(func(props *cryptobyte.Builder) {
+		// Properties are added in numerical order by codepoint.
 		if len(l.TrustAnchorID) != 0 {
 			props.AddUint16(propertyTrustAnchorID)
 			props.AddUint16LengthPrefixed(func(child *cryptobyte.Builder) {
@@ -66,14 +69,14 @@ func (l *CertificatePropertyList) Marshal() ([]byte, error) {
 				addTrustAnchorID(child, l.TrustAnchorID)
 			})
 		}
-		if len(l.TrustAnchorGroupInclusions) != 0 {
-			props.AddUint16(propertyTrustAnchorGroupInclusions)
+		if len(l.TrustAnchorGroupRanges) != 0 {
+			props.AddUint16(propertyTrustAnchorGroupRanges)
 			// TLS's presentation language leads to many redundant length prefixes.
 			// First we have a length prefix for the property's `data` field.
 			props.AddUint16LengthPrefixed(func(child *cryptobyte.Builder) {
 				// Now the TrustAnchorRangeList needs a length prefix.
 				child.AddUint16LengthPrefixed(func(list *cryptobyte.Builder) {
-					for _, r := range l.TrustAnchorGroupInclusions {
+					for _, r := range l.TrustAnchorGroupRanges {
 						// The ID is encoded as a TrustAnchorID, so it needs a length prefix,
 						// or the parsing will be ambiguous.
 						list.AddUint8LengthPrefixed(func(id *cryptobyte.Builder) {
@@ -89,6 +92,23 @@ func (l *CertificatePropertyList) Marshal() ([]byte, error) {
 			props.AddUint16(propertyTrustAnchorNegotiation)
 			props.AddUint16LengthPrefixed(func(child *cryptobyte.Builder) {})
 		}
+		if len(l.TrustAnchorGroupPrefixes) != 0 {
+			props.AddUint64(propertyTrustAnchorGroupPrefixes)
+			// TLS's presentation language leads to many redundant length prefixes.
+			// First we have a length prefix for the property's `data` field.
+			props.AddUint16LengthPrefixed(func(child *cryptobyte.Builder) {
+				// Now the TrustAnchorPrefixList needs a length prefix.
+				child.AddUint16LengthPrefixed(func(list *cryptobyte.Builder) {
+					for _, p := range l.TrustAnchorGroupPrefixes {
+						// The ID is encoded as a TrustAnchorID, so it needs a length prefix,
+						// or the parsing will be ambiguous.
+						list.AddUint8LengthPrefixed(func(id *cryptobyte.Builder) {
+							addTrustAnchorID(id, p)
+						})
+					}
+				})
+			})
+		}
 	})
 	return b.Bytes()
 }
@@ -96,7 +116,10 @@ func (l *CertificatePropertyList) Marshal() ([]byte, error) {
 func main() {
 	props := CertificatePropertyList{
 		TrustAnchorID: []uint64{32473, 1},
-		TrustAnchorGroupInclusions: []TrustAnchorRange{
+		TrustAnchorGroupPrefixes: []TrustAnchorID{
+			{32473, 4},
+		},
+		TrustAnchorGroupRanges: []TrustAnchorRange{
 			{Base: []uint64{2187, 2}, Min: 100, Max: 200},
 			{Base: []uint64{32473, 3}, Min: 42, Max: math.MaxUint64},
 		},
