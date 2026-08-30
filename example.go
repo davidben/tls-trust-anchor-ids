@@ -118,6 +118,7 @@ func main() {
 		TrustAnchorID: []uint64{32473, 1},
 		TrustAnchorGroupPrefixes: []TrustAnchorID{
 			{32473, 4},
+			{32473, 5},
 		},
 		TrustAnchorGroupRanges: []TrustAnchorRange{
 			{Base: []uint64{2187, 2}, Min: 100, Max: 200},

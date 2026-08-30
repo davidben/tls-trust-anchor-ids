@@ -521,13 +521,14 @@ The following is an example file with a certification path containing an end-ent
   * `2187.2.100` to `2187.2.200`
   * `32473.3.42` to `32473.3.MAX`
 * A `trust_anchor_negotiation` property
-* A `trust_anchor_group_prefixes` property with one prefix:
+* A `trust_anchor_group_prefixes` property with two prefixes:
   * `32473.4`
+  * `32473.5`
 
 ~~~
 -----BEGIN CERTIFICATE PROPERTIES-----
-AEwAAAAEgf1ZAQABACsAKQORCwIAAAAAAAAAZAAAAAAAAADIBIH9WQMAAAAAAAAA
-Kv//////////AAIAAAAAAAAAAAADAAcABQSB/VkE
+AFEAAAAEgf1ZAQABACsAKQORCwIAAAAAAAAAZAAAAAAAAADIBIH9WQMAAAAAAAAA
+Kv//////////AAIAAAAAAAAAAAADAAwACgSB/VkEBIH9WQU=
 -----END CERTIFICATE PROPERTIES-----
 -----BEGIN CERTIFICATE-----
 MIIBVzCB/6ADAgECAgkAh7Uv5X8pplkwCgYIKoZIzj0EAwIwGjEYMBYGA1UEAwwP
